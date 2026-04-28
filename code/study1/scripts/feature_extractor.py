@@ -23,7 +23,9 @@ DATA_ROOT = PROJECT_ROOT / "data"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Study 1 pipeline through Phase 3 (MIMIC-CXR + MIMIC-IV).")
+    parser = argparse.ArgumentParser(
+        description="Study 1 feature extraction pipeline (data prep, features, and clustering)."
+    )
     parser.add_argument(
         "--metadata-csv",
         type=Path,
@@ -44,8 +46,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DATA_ROOT / "MIMIC-IV/csv/patients.csv",
     )
-    parser.add_argument("--output-csv", type=Path, default=DATA_ROOT / "MIMIC-CXR/csv/study1_phase1_3_features.csv")
-    parser.add_argument("--qc-csv", type=Path, default=DATA_ROOT / "MIMIC-CXR/csv/study1_phase1_3_qc.csv")
+    parser.add_argument(
+        "--output-csv", type=Path, default=DATA_ROOT / "MIMIC-CXR/csv/study1_features.csv"
+    )
+    parser.add_argument(
+        "--qc-csv", type=Path, default=DATA_ROOT / "MIMIC-CXR/csv/study1_feature_qc.csv"
+    )
     parser.add_argument("--k-clusters", type=int, default=30, help="KMeans clusters for proxy radiologist IDs.")
     parser.add_argument("--max-reports", type=int, default=None, help="Optional cap for faster test runs.")
     parser.add_argument("--random-state", type=int, default=42)
@@ -85,7 +91,7 @@ def run() -> None:
     result.to_csv(args.output_csv, index=False)
     pd.DataFrame([qc]).to_csv(args.qc_csv, index=False)
 
-    logger.info("Pipeline complete (Phase 1-3).")
+    logger.info("Feature extraction pipeline complete.")
     logger.info("Output rows: %s", qc["n_reports"])
     logger.info("Timestamp granularity detected: %s", qc["time_granularity"])
     logger.info("Circadian mode used: %s", qc["circadian_mode_used"])
