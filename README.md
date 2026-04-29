@@ -1,6 +1,6 @@
 # CS767 Project
 
-Analyses on MIMIC-CXR and linked MIMIC-IV where applicable.
+Analyses on MIMIC-CXR, MIMIC_CXR_JPG and MIMIC-IV, MIMIC_IV-Note.
 
 | Study | Topic | Features |
 |-------|--------|--------|
@@ -76,8 +76,8 @@ Useful flags: `--metadata-csv`, `--chexpert-csv`, `--reports-root`, `--mimic-iv-
 
 **Outputs**
 
-- `data/MIMIC-CXR/csv/study1_feature_extraction_features.csv` - one row per report with `study_id`, `subject_id`, `study_datetime`, `circadian_bin`, `report_text`, language features, `severity`, `radiologist_cluster`, `gender`, `anchor_age`.
-- `data/MIMIC-CXR/csv/study1_feature_extraction_qc.csv` - single-row summary (row counts, detected time granularity, circadian mode, bin counts).
+- `data/MIMIC-CXR/csv/study1_features.csv` - one row per report with `study_id`, `subject_id`, `study_datetime`, `circadian_bin`, `report_text`, language features, `severity`, `radiologist_cluster`, `gender`, `anchor_age`.
+- `data/MIMIC-CXR/csv/study1_feature_qc.csv` - single-row summary (row counts, detected time granularity, circadian mode, bin counts).
 
 ### Run stats modeling and results analysis
 
@@ -89,10 +89,10 @@ Useful flags: `--input-csv`, `--out-dir`, `--alpha`, `--force-three-comparisons`
 
 **Stats modeling and results outputs**
 
-- `data/MIMIC-CXR/csv/study1_stats_results/study1_table1_descriptives.csv` - mean, SD, and mean ± SD by circadian bin for all five features (+ bin sample size).
-- `data/MIMIC-CXR/csv/study1_stats_results/study1_table2_mixedlm_effects.csv` - mixed-effects circadian contrasts, p-values, Bonferroni-adjusted p-values, Cohen's *d*, and test counts.
-- `data/MIMIC-CXR/csv/study1_stats_results/study1_icc_summary.csv` - ICC per feature (pingouin ICC2 when available; otherwise random-intercept variance ratio).
-- `data/MIMIC-CXR/csv/study1_stats_results/study1_feature_distributions.png` - multi-panel violin+box plot by circadian bin (one panel per feature).
+- `data/MIMIC-CXR/csv/study1_results/study1_table1_descriptives.csv` - mean, SD, and mean ± SD by circadian bin for all five features (+ bin sample size).
+- `data/MIMIC-CXR/csv/study1_results/study1_table2_mixedlm_effects.csv` - mixed-effects circadian contrasts, p-values, Bonferroni-adjusted p-values, Cohen's *d*, and test counts.
+- `data/MIMIC-CXR/csv/study1_results/study1_icc_summary.csv` - ICC per feature (pingouin ICC2 when available; otherwise random-intercept variance ratio).
+- `data/MIMIC-CXR/csv/study1_results/study1_feature_distributions.png` - multi-panel violin+box plot by circadian bin (one panel per feature).
 
 ### Optional: DICOM metadata to text
 
