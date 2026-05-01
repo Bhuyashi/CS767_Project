@@ -2,3 +2,5 @@ data/
 code/logs/
 *__pycache__*
 Project_proposal/
+CLAUDE.md
+.DS_STORE
