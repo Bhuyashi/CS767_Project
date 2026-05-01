@@ -1,0 +1,19 @@
+# ── Core / shared ────────────────────────────────────────────────────────────
+pandas>=1.5
+numpy>=1.23
+
+# ── Study 1 ──────────────────────────────────────────────────────────────────
+scikit-learn>=1.2
+statsmodels>=0.14
+matplotlib>=3.7
+pingouin>=0.5          # optional: ICC2 via pingouin; falls back to MixedLM ratio without it
+
+# ── Study 2 — BioViL-T ───────────────────────────────────────────────────────
+# PyTorch: install the CUDA-enabled build manually BEFORE the packages below.
+# Example for CUDA 12.1:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# CPU-only fallback (slow for inference):
+#   pip install torch torchvision
+#
+# After torch is installed, install the rest:
+hi-ml-multimodal>=0.2.2   # pulls in transformers, timm, scikit-image, pydicom, SimpleITK

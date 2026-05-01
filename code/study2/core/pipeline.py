@@ -70,6 +70,7 @@ def run_inference(
 
         try:
             current_emb = engine.encode_image(current_path, prior_path=prior_path)
+            # Prior embedding is always single-image (no further conditioning).
             prior_emb = engine.encode_image(Path(row["prior_image_path"])) if use_prior else current_emb
             similarities = engine.get_similarities(current_path, text_prompts, prior_path=prior_path)
         except Exception as exc:
