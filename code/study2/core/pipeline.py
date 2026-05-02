@@ -17,6 +17,7 @@ def run_inference(
     prompt_columns: list[str],
     use_prior: bool,
     max_pairs: int | None,
+    device: str = "cpu",
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Run BioViL-T inference over a DataFrame of image pairs.
 
@@ -35,6 +36,8 @@ def run_inference(
         When False, run single-image inference (ignores prior_image_path).
     max_pairs:
         Hard cap on number of pairs to process; None means no cap.
+    device:
+        Torch device string for BioViL-T (e.g. ``"cuda"``, ``"cpu"``).
 
     Returns
     -------
@@ -51,7 +54,7 @@ def run_inference(
         pairs = pairs.head(max_pairs)
         logger.info("max_pairs cap applied: processing %d pairs", len(pairs))
 
-    engine = BioVilTInferenceEngine()
+    engine = BioVilTInferenceEngine(device=device)
 
     result_rows: list[dict[str, object]] = []
     current_embs: list[np.ndarray] = []

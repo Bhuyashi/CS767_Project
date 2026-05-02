@@ -1,0 +1,74 @@
+# ==============================================================================
+# HTCondor: Study 2 (BioViL-T) inference on CHTC GPU Lab (Docker universe)
+# ==============================================================================
+#
+# Prereqs:
+#   - Dataset tarball on staging, e.g.
+#       /staging/YOURNETID/study2_data.tar.gz
+#     (create with: bash chtc/stage_data.sh  then upload to your staging area)
+#   - Docker image pushed, e.g. docker://YOURDOCKERHUB/cs767_study2:latest
+#     (build with chtc/Dockerfile from repo root)
+#   - First model download: workers need outbound network for Hugging Face /
+#     hi-ml weights unless you bake caches into the image.
+#
+# Submit (from this repo clone on submit1.chtc.wisc.edu, with chtc/ at repo root):
+#   mkdir -p chtc/logs
+#   condor_submit chtc/study2.sub
+#
+# Overrides:
+#   condor_submit chtc/study2.sub \
+#     container_image=docker://YOU/cs767_study2:v2 \
+#     input_staging_path=file:///staging/YOU/study2_data.tar.gz \
+#     run_suffix=mypilot \
+#     netid=yournetid
+#
+# Docs:
+#   https://chtc.cs.wisc.edu/uw-research-computing/gpu-jobs
+#   https://chtc.cs.wisc.edu/uw-research-computing/docker-jobs
+# ==============================================================================
+
+universe                = container
+container_image         = docker://YOURDOCKERHUB/cs767_study2:latest
+
+netid                   = YOURNETID
+input_tarball_name      = study2_data.tar.gz
+run_suffix              = study2_$(Cluster)
+
+executable              = chtc/run_study2.sh
+arguments               = $(input_tarball_name) $(run_suffix) $(netid)
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT_OR_EVICT
+getenv                  = True
+
+# Input: dataset tarball on CHTC staging (override path to your file)
+input_staging_path      = file:///staging/$(netid)/study2_data.tar.gz
+transfer_input_files    = $(input_staging_path)
+
+# Single tarball produced by run_study2.sh
+transfer_output_files   = study2_bundle.tar
+transfer_output_remaps  = "study2_bundle.tar = file:///staging/$(netid)/cs767_project/$(run_suffix).tar"
+
+log                     = chtc/logs/study2_$(Cluster).log
+output                  = chtc/logs/study2_$(Cluster).out
+error                   = chtc/logs/study2_$(Cluster).err
+
+request_gpus            = 1
+request_cpus            = 8
+request_memory          = 64GB
+request_disk            = 500GB
+
+# A100/H100 class (80GB). Lower (e.g. 24576) if you use smaller GPUs / batches.
+gpus_minimum_memory     = 80000
+
++WantGPULab             = true
++GPUJobLength           = "long"
+
+Requirements            = (Target.HasCHTCStaging == true)
+
+environment             = "HOME=$_CONDOR_SCRATCH_DIR PYTHONPATH=/workspace/code HF_HOME=$_CONDOR_SCRATCH_DIR/.hf WANDB_DIR=$_CONDOR_SCRATCH_DIR/wandb"
+
+stream_output           = True
+stream_error            = True
+
+queue 1

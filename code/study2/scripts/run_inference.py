@@ -29,6 +29,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_ROOT = PROJECT_ROOT / "data"
 
 
+def _resolve_device(arg: str) -> str:
+    if arg == "auto":
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return arg
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Study 2: BioViL-T inference pipeline for MIMIC-CXR temporal image pairs."
@@ -61,6 +69,13 @@ def parse_args() -> argparse.Namespace:
         "--no-prior",
         action="store_true",
         help="Run single-image BioViL-T inference; ignore prior image conditioning.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help='Torch device for inference ("auto" uses CUDA when available).',
     )
     parser.add_argument(
         "--log-level",
@@ -96,12 +111,15 @@ def run() -> None:
         sys.exit(1)
 
     use_prior = not args.no_prior
+    device = _resolve_device(args.device)
+    logger.info("Inference device: %s", device)
     results_df, current_embs, prior_embs = run_inference(
         pairs=pairs,
         text_prompts=DEFAULT_TEXT_PROMPTS,
         prompt_columns=DEFAULT_PROMPT_COLUMNS,
         use_prior=use_prior,
         max_pairs=args.max_pairs,
+        device=device,
     )
 
     if results_df.empty:
