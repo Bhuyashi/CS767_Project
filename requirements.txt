@@ -21,4 +21,6 @@ tqdm>=4.65               # study2: chunked CSV progress
 #   pip install torch torchvision
 #
 # After torch is installed, install the rest:
-hi-ml-multimodal>=0.2.2   # pulls in transformers, timm, scikit-image, pydicom, SimpleITK
+hi-ml-multimodal>=0.2.2   # pulls in timm, scikit-image, pydicom, SimpleITK
+transformers>=4.30,<5.0   # hi-ml-multimodal is incompatible with transformers 5.x
+huggingface-hub>=0.19,<1.0  # keep in sync with transformers 4.x
