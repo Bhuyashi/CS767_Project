@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from pathlib import Path
 
@@ -13,7 +14,7 @@ class BioVilTInferenceEngine:
 
     Supports:
     - Single-image global embedding and text similarity.
-    - Temporal (prior-conditioned) embedding via MultiImageModel.forward().
+    - Temporal (prior-conditioned) embedding via MultiImageEncoder (current + prior).
 
     Install:  pip install hi-ml-multimodal
     """
@@ -55,8 +56,9 @@ class BioVilTInferenceEngine:
         image_path:
             Current chest X-ray JPG or DICOM.
         prior_path:
-            Prior chest X-ray for temporal conditioning. When given, the
-            MultiImageModel encoder processes both images jointly.
+            Prior chest X-ray for temporal conditioning. When given and the
+            backbone exposes ``previous_image``, both studies are encoded jointly
+            (same path as hi-ml's ``MultiImageModel``).
 
         Returns
         -------
@@ -69,8 +71,21 @@ class BioVilTInferenceEngine:
         if prior_path is not None:
             current_t, _ = img_engine.load_and_transform_input_image(image_path, img_engine.transform)
             prior_t, _ = img_engine.load_and_transform_input_image(prior_path, img_engine.transform)
+            model = img_engine.model
+            enc = model.encoder
             with self._torch.no_grad():
-                out = img_engine.model.forward(current_t, previous_image=prior_t)
+                # BioViL-T uses MultiImageEncoder under plain ImageModel; ImageModel.forward
+                # only accepts ``x``, so paired inputs must go through the encoder + projector.
+                if "previous_image" in inspect.signature(enc.forward).parameters:
+                    patch_x, pooled_x = enc(
+                        current_t, prior_t, return_patch_embeddings=True
+                    )
+                    out = model.forward_post_encoder(patch_x, pooled_x)
+                else:
+                    logger.warning(
+                        "prior_path was set but encoder has no previous_image; using current image only"
+                    )
+                    out = model.forward(current_t)
                 emb = F.normalize(out.projected_global_embedding, dim=-1)[0]
         else:
             emb = img_engine.get_projected_global_embedding(image_path)

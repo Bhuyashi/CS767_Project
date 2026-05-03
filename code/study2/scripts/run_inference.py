@@ -16,8 +16,7 @@ if str(_CODE_DIR) not in sys.path:
 from study_logging import configure_study_logging
 from study2.core.constants import DEFAULT_PROMPT_COLUMNS, DEFAULT_TEXT_PROMPTS
 from study2.core.data_io import (
-    build_temporal_pairs,
-    load_metadata_frontal,
+    load_or_build_temporal_pairs,
     resolve_pair_image_paths,
     validate_required_paths,
 )
@@ -150,6 +149,17 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
+    parser.add_argument(
+        "--pairs-cache-dir",
+        type=Path,
+        default=DATA_ROOT / "MIMIC-CXR/csv/study2_cache",
+        help="Directory for temporal-pairs disk cache (metadata mtime+size must match).",
+    )
+    parser.add_argument(
+        "--no-pairs-cache",
+        action="store_true",
+        help="Always rebuild temporal pairs from metadata (ignore cache).",
+    )
     return parser.parse_args()
 
 
@@ -165,8 +175,12 @@ def run() -> None:
         }
     )
 
-    metadata = load_metadata_frontal(args.metadata_csv)
-    pairs = build_temporal_pairs(metadata)
+    use_pairs_cache = not args.no_pairs_cache
+    pairs = load_or_build_temporal_pairs(
+        args.metadata_csv,
+        cache_dir=args.pairs_cache_dir,
+        use_cache=use_pairs_cache,
+    )
 
     if pairs.empty:
         logger.error("No temporal pairs found. Check that the metadata CSV contains subjects with ≥2 studies.")

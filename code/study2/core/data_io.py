@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,76 @@ from tqdm import tqdm
 from .constants import FRONTAL_VIEW_CODES
 
 logger = logging.getLogger(__name__)
+
+_TEMPORAL_PAIRS_CACHE_SCHEMA = 1
+
+
+def _file_fingerprint(path: Path) -> dict[str, object]:
+    st = path.stat()
+    return {
+        "path": str(path.resolve()),
+        "mtime_ns": int(st.st_mtime_ns),
+        "size": int(st.st_size),
+    }
+
+
+def _temporal_pairs_cache_paths(cache_dir: Path, metadata_csv: Path) -> tuple[Path, Path]:
+    """Return (pickle_path, meta_json_path) for this metadata file."""
+    h = hashlib.sha256(str(metadata_csv.resolve()).encode()).hexdigest()[:16]
+    base = cache_dir / f"temporal_pairs_{metadata_csv.stem}_{h}"
+    return base.with_suffix(".pkl"), base.with_suffix(".meta.json")
+
+
+def load_or_build_temporal_pairs(
+    metadata_csv: Path,
+    *,
+    cache_dir: Path | None,
+    use_cache: bool = True,
+) -> pd.DataFrame:
+    """Load frontal metadata, build consecutive-study pairs, optionally from disk cache.
+
+    When ``use_cache`` and ``cache_dir`` are set, skips CSV load and pair construction
+    if the cache exists and matches the metadata file's size and modification time.
+    """
+    if not use_cache or cache_dir is None:
+        metadata = load_metadata_frontal(metadata_csv)
+        return build_temporal_pairs(metadata)
+
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    pkl_path, meta_path = _temporal_pairs_cache_paths(cache_dir, metadata_csv)
+    fp = _file_fingerprint(metadata_csv)
+
+    if pkl_path.exists() and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Ignoring invalid temporal pairs cache meta (%s): %s", meta_path, e)
+        else:
+            if (
+                meta.get("schema") == _TEMPORAL_PAIRS_CACHE_SCHEMA
+                and meta.get("metadata") == fp
+            ):
+                logger.info("Loading temporal pairs from cache %s", pkl_path)
+                return pd.read_pickle(pkl_path)
+            logger.info("Temporal pairs cache stale or schema mismatch; rebuilding.")
+
+    metadata = load_metadata_frontal(metadata_csv)
+    pairs = build_temporal_pairs(metadata)
+    pairs.to_pickle(pkl_path)
+    meta_path.write_text(
+        json.dumps(
+            {
+                "schema": _TEMPORAL_PAIRS_CACHE_SCHEMA,
+                "metadata": fp,
+                "n_pairs": int(len(pairs)),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    logger.info("Wrote temporal pairs cache (%d pairs) to %s", len(pairs), pkl_path)
+    return pairs
 
 
 def validate_required_paths(paths: dict[str, Path]) -> None:
