@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from tqdm import tqdm
 
 from .constants import FRONTAL_VIEW_CODES
 
@@ -80,7 +81,13 @@ def build_temporal_pairs(metadata: pd.DataFrame) -> pd.DataFrame:
     n_subjects = metadata["subject_id"].nunique()
     logger.info("Building temporal pairs across %d subjects", n_subjects)
 
-    for subject_id, group in metadata.groupby("subject_id"):
+    grouped = metadata.groupby("subject_id", sort=False)
+    for subject_id, group in tqdm(
+        grouped,
+        total=n_subjects,
+        desc="Building temporal pairs",
+        unit="subject",
+    ):
         studies = group.sort_values("study_datetime").reset_index(drop=True)
         if len(studies) < 2:
             continue
@@ -114,16 +121,26 @@ def build_temporal_pairs(metadata: pd.DataFrame) -> pd.DataFrame:
     return pairs
 
 
-def locate_image(
+def image_path_for(
     images_root: Path, subject_id: int, study_id: int, dicom_id: str
-) -> Path | None:
-    """Return the JPG path for a MIMIC-CXR-JPG image, or None if not found.
+) -> Path:
+    """Filesystem path for a MIMIC-CXR-JPG file (may not exist on disk).
 
     Expected layout:
       <images_root>/p{subject_id[:2]}/p{subject_id}/s{study_id}/{dicom_id}.jpg
     """
     subject_prefix = f"p{str(subject_id)[:2]}"
-    path = images_root / subject_prefix / f"p{subject_id}" / f"s{study_id}" / f"{dicom_id}.jpg"
+    base = images_root / subject_prefix / f"p{subject_id}" / f"s{study_id}"
+    d = str(dicom_id).strip()
+    name = d if d.lower().endswith(".jpg") else f"{d}.jpg"
+    return base / name
+
+
+def locate_image(
+    images_root: Path, subject_id: int, study_id: int, dicom_id: str
+) -> Path | None:
+    """Return the JPG path for a MIMIC-CXR-JPG image, or None if not found."""
+    path = image_path_for(images_root, subject_id, study_id, dicom_id)
     return path if path.exists() else None
 
 
@@ -150,8 +167,28 @@ def resolve_pair_image_paths(
     missing_current = pairs["current_image_path"].isna().sum()
     missing_prior = pairs["prior_image_path"].isna().sum()
 
+    example_current: Path | None = None
+    example_prior: Path | None = None
+    if n_total > 0:
+        r0 = pairs.iloc[0]
+        example_current = image_path_for(
+            images_root, int(r0["subject_id"]), int(r0["current_study_id"]), str(r0["current_dicom_id"])
+        )
+        example_prior = image_path_for(
+            images_root, int(r0["subject_id"]), int(r0["prior_study_id"]), str(r0["prior_dicom_id"])
+        )
+
     pairs = pairs.dropna(subset=["current_image_path", "prior_image_path"]).reset_index(drop=True)
     n_kept = len(pairs)
+
+    if n_kept == 0 and n_total > 0 and example_current is not None and example_prior is not None:
+        logger.warning(
+            "No images resolved; example paths for first pair — current=%s (exists=%s), prior=%s (exists=%s)",
+            example_current,
+            example_current.exists(),
+            example_prior,
+            example_prior.exists(),
+        )
 
     qc = {
         "n_pairs_total": n_total,

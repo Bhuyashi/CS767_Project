@@ -97,6 +97,9 @@ def run_inference(
             "prior_image_path": row["prior_image_path"],
             "use_prior_conditioning": use_prior,
         }
+        for optional_col in ("hadm_id", "disease_type", "diagnosis_time", "hours_before_diagnosis"):
+            if optional_col in row.index:
+                result_row[optional_col] = row[optional_col]
         for col, score in zip(prompt_columns, similarities):
             result_row[col] = round(score, 6)
 
