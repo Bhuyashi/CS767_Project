@@ -1,6 +1,6 @@
 # Study 2 on CHTC (HTCondor)
 
-Short README on how to run **Study 2** (BioViL-T inference over MIMIC-CXR temporal pairs) on CHTC.
+Short README on how to run **Study 2** (BioViL-T inference over each cohort event's in-window CXR sequence) on CHTC.
 
 ## Prerequisites
 
@@ -82,12 +82,12 @@ With `getenv = True`, variables you export on the submit host can affect the job
 | Variable | Purpose |
 |----------|---------|
 | `STUDY2_DEVICE` | Force device (default behavior uses CUDA in the script). |
-| `STUDY2_MAX_PAIRS` | If set, passes `--max-pairs` for a **pilot** subset. |
+| `STUDY2_MAX_PATIENTS` | If set, passes `--max-patients` for a **pilot** subset (cohort events). |
 
 Example pilot (combine with submit-node export or your preferred HTCondor `environment` line):
 
 ```bash
-export STUDY2_MAX_PAIRS=500
+export STUDY2_MAX_PATIENTS=500
 condor_submit chtc/study2.sub
 ```
 

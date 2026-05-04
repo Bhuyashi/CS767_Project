@@ -11,7 +11,7 @@
 # netid, then point transfer_input_files in study2.sub at that path.
 #
 # The full MIMIC-CXR-JPG tree is large; stage only what you need or use
-# --max-pairs via a local dry run and a smaller subset tarball for tests.
+# --max-patients via a local dry run and a smaller subset tarball for tests.
 # =============================================================================
 set -euo pipefail
 

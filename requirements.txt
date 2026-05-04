@@ -12,6 +12,7 @@ pingouin>=0.5          # optional: ICC2 via pingouin; falls back to MixedLM rati
 
 
 tqdm>=4.65               # study2: chunked CSV progress
+lifelines>=0.27          # study2: KM / Cox / log-rank for lead-time outcomes
 
 # ── Study 2 — BioViL-T ───────────────────────────────────────────────────────
 # PyTorch: install the CUDA-enabled build manually BEFORE the packages below.

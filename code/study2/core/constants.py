@@ -1,8 +1,21 @@
 from __future__ import annotations
 
+from typing import Literal
+
 BIOVIL_T_MODEL_ID = "microsoft/BioViL-T"
 
 FRONTAL_VIEW_CODES: frozenset[str] = frozenset({"PA", "AP"})
+
+# Phase 2 disease-specific VLM scores: cosine similarity is mapped to [0, 1] in ``model.py``.
+# Heart failure: pulmonary edema (primary imaging correlate).
+HEART_FAILURE_SCORE_PROMPTS: tuple[str, ...] = ("Pulmonary edema.",)
+# Sepsis: pneumonia and consolidation; aggregate = max of per-prompt mapped scores.
+SEPSIS_SCORE_PROMPTS: tuple[str, ...] = (
+    "Pneumonia.",
+    "Lung consolidation.",
+)
+
+CohortDiseaseType = Literal["heart_failure", "sepsis"]
 
 DEFAULT_TEXT_PROMPTS: list[str] = [
     "No acute cardiopulmonary abnormality.",

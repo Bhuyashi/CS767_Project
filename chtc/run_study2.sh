@@ -42,8 +42,8 @@ if [[ "${STUDY2_DEVICE:-cuda}" != "cuda" ]]; then
 fi
 
 EXTRA=()
-if [[ -n "${STUDY2_MAX_PAIRS:-}" ]]; then
-  EXTRA+=(--max-pairs "${STUDY2_MAX_PAIRS}")
+if [[ -n "${STUDY2_MAX_PATIENTS:-}" ]]; then
+  EXTRA+=(--max-patients "${STUDY2_MAX_PATIENTS}")
 fi
 
 python /workspace/code/study2/scripts/run_inference.py \

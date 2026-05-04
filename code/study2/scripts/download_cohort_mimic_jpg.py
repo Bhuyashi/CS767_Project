@@ -1,8 +1,9 @@
 """Download a small subset of MIMIC-CXR-JPG files for Study 2 cohort subjects.
 
-Selects frontal temporal pairs whose *current* study falls in the Phase-1 diagnosis
-window (same rules as ``run_inference._link_pairs_to_index_cohort``), then downloads
-up to ``--max-images`` unique JPG files from PhysioNet.
+Selects frontal studies that fall in each cohort event's pre-diagnosis window (same
+construction as ``study2.core.data_io.build_cohort_study_sequence_table`` with
+``images_root=None`` for metadata-only listing), then downloads up to ``--max-images``
+unique JPG files from PhysioNet.
 
 Prerequisites (you must do this outside this script):
   - PhysioNet account: https://physionet.org/register/
@@ -49,7 +50,7 @@ if str(_CODE_DIR) not in sys.path:
     sys.path.insert(0, str(_CODE_DIR))
 
 from study_logging import configure_study_logging
-from study2.core.data_io import build_temporal_pairs, load_metadata_frontal
+from study2.core.data_io import build_cohort_study_sequence_table, load_metadata_frontal
 
 logger = logging.getLogger(__name__)
 
@@ -102,33 +103,6 @@ def _load_index_cohort(cohort_csv: Path) -> pd.DataFrame:
     cohort = cohort.dropna(subset=["diagnosis_time"]).copy()
     cohort["window_start"] = cohort["diagnosis_time"] - pd.to_timedelta(cohort["window_days"], unit="D")
     return cohort
-
-
-def _link_pairs_to_index_cohort(pairs: pd.DataFrame, cohort: pd.DataFrame) -> pd.DataFrame:
-    """Same cohort window + dedupe logic as ``run_inference._link_pairs_to_index_cohort``."""
-    merged = pairs.merge(
-        cohort[["subject_id", "hadm_id", "disease_type", "diagnosis_time", "window_start"]],
-        on="subject_id",
-        how="inner",
-    )
-    if merged.empty:
-        return merged
-
-    in_window = merged[
-        (merged["current_datetime"] >= merged["window_start"])
-        & (merged["current_datetime"] <= merged["diagnosis_time"])
-    ].copy()
-    if in_window.empty:
-        return in_window
-
-    in_window["hours_before_diagnosis"] = (
-        (in_window["diagnosis_time"] - in_window["current_datetime"]).dt.total_seconds() / 3600.0
-    )
-    return (
-        in_window.sort_values(["subject_id", "current_study_id", "hours_before_diagnosis"])
-        .drop_duplicates(subset=["subject_id", "current_study_id"], keep="first")
-        .reset_index(drop=True)
-    )
 
 
 def _subject_prefix(subject_id: int) -> str:
@@ -294,46 +268,42 @@ def _download_one(
     return True, "downloaded"
 
 
-def iter_unique_jpg_targets_from_pairs(
-    linked_pairs: pd.DataFrame,
+def iter_unique_jpg_targets_from_sequence_table(
+    sequence_df: pd.DataFrame,
     *,
     max_images: int,
 ) -> Iterator[tuple[Path, dict[str, object]]]:
-    """Yield (relative path under ``files/``, manifest row) up to ``max_images`` unique files.
+    """Yield (relative path under ``files/``, manifest row) up to ``max_images`` unique JPGs.
 
-    Processes **whole temporal pairs** (prior + current) in order: a pair is only included
-    if all of its not-yet-seen images can be added without exceeding ``max_images``. This
-    avoids leaving a lone prior/current with the partner missing for inference.
+    Iterates studies in chronological order within each cohort event; skips files already
+    counted toward ``max_images``.
     """
     seen: set[tuple[int, int, str]] = set()
+    if sequence_df.empty:
+        return
 
-    for _, row in linked_pairs.iterrows():
+    ordered = sequence_df.sort_values(
+        ["subject_id", "hadm_id", "disease_type", "study_datetime"], kind="mergesort"
+    )
+    for _, row in ordered.iterrows():
         if len(seen) >= max_images:
             break
-
         sid = int(row["subject_id"])
-        specs: list[tuple[str, int, str]] = [
-            ("prior", int(row["prior_study_id"]), str(row["prior_dicom_id"]).strip()),
-            ("current", int(row["current_study_id"]), str(row["current_dicom_id"]).strip()),
-        ]
-        keys = [(sid, study_id, dicom_id) for _, study_id, dicom_id in specs]
-        new_keys = [k for k in keys if k not in seen]
-        if len(seen) + len(new_keys) > max_images:
-            break
-
-        for (role, study_id, dicom_id), key in zip(specs, keys, strict=True):
-            if key in seen:
-                continue
-            seen.add(key)
-            rel = _local_jpg_relpath(sid, study_id, dicom_id)
-            yield rel, {
-                "subject_id": sid,
-                "study_id": study_id,
-                "dicom_id": dicom_id,
-                "role_in_pair": role,
-                "current_study_id": int(row["current_study_id"]),
-                "prior_study_id": int(row["prior_study_id"]),
-            }
+        study_id = int(row["study_id"])
+        dicom_id = str(row["dicom_id"]).strip()
+        key = (sid, study_id, dicom_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        rel = _local_jpg_relpath(sid, study_id, dicom_id)
+        yield rel, {
+            "subject_id": sid,
+            "hadm_id": int(row["hadm_id"]),
+            "disease_type": str(row["disease_type"]),
+            "study_id": study_id,
+            "dicom_id": dicom_id,
+            "seq_index": int(row["seq_index"]) if "seq_index" in row.index and pd.notna(row["seq_index"]) else None,
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -363,6 +333,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=100,
         help="Maximum number of unique JPG files to download (default: 100).",
+    )
+    p.add_argument(
+        "--min-resolved-studies",
+        type=int,
+        default=3,
+        help="Minimum in-window frontal studies per cohort event (match run_inference).",
     )
     p.add_argument(
         "--physionet-user",
@@ -454,22 +430,25 @@ def run() -> None:
         logger.error("No frontal metadata rows for cohort subjects — check metadata/cohort overlap.")
         sys.exit(1)
 
-    pairs = build_temporal_pairs(metadata)
-    if pairs.empty:
-        logger.error("No temporal pairs among cohort subjects with ≥2 frontal studies.")
-        sys.exit(1)
-
-    linked = _link_pairs_to_index_cohort(pairs, cohort)
-    if linked.empty:
+    seq_df, seq_qc = build_cohort_study_sequence_table(
+        cohort,
+        metadata,
+        images_root=None,
+        min_resolved_studies=args.min_resolved_studies,
+    )
+    if seq_df.empty:
         logger.error(
-            "No temporal pairs fell in the diagnosis window for this cohort/metadata combo."
+            "No in-window frontal studies for cohort after sequence filter. QC=%s",
+            seq_qc,
         )
         sys.exit(1)
 
     files_root = args.output_root / "files"
-    targets = list(iter_unique_jpg_targets_from_pairs(linked, max_images=args.max_images))
+    targets = list(
+        iter_unique_jpg_targets_from_sequence_table(seq_df, max_images=args.max_images)
+    )
     logger.info(
-        "Selected %d unique JPGs from cohort-window pairs (cap=%d).",
+        "Selected %d unique JPGs from cohort-window study sequences (cap=%d).",
         len(targets),
         args.max_images,
     )
@@ -481,7 +460,8 @@ def run() -> None:
         "files_root": str(files_root),
         "physionet_base_url": args.base_url,
         "max_images": args.max_images,
-        "n_linked_pairs_available": int(len(linked)),
+        "sequence_table_qc": seq_qc,
+        "n_sequence_rows": int(len(seq_df)),
         "n_images_selected": len(targets),
         "dry_run": args.dry_run,
         "images": [],

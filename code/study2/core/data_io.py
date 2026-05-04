@@ -272,3 +272,111 @@ def resolve_pair_image_paths(
         n_total, missing_current, missing_prior, n_kept,
     )
     return pairs, qc
+
+
+def build_cohort_study_sequence_table(
+    cohort: pd.DataFrame,
+    frontal_studies: pd.DataFrame,
+    images_root: Path | None,
+    *,
+    min_resolved_studies: int = 3,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """One row per frontal CXR study in the pre-diagnosis window, chronologically per cohort event.
+
+    Cohort rows must include ``subject_id``, ``hadm_id``, ``disease_type``, ``diagnosis_time``.
+    If ``window_days`` is absent it defaults to 14; ``window_start`` is derived when missing.
+
+    ``frontal_studies`` should be one frontal row per study (e.g. from :func:`load_metadata_frontal`).
+    When ``images_root`` is set, rows without a resolvable JPG are dropped; groups with fewer than
+    ``min_resolved_studies`` remaining rows are removed (frontal-on-disk can be stricter than Phase 1
+    counts that used all metadata views).
+
+    Returns
+    -------
+    table
+        Columns include ``seq_index`` (0-based order in window), ``image_path``, ``hours_before_diagnosis``.
+    qc
+        JSON-serialisable counts for logging / QC files.
+    """
+    required = {"subject_id", "hadm_id", "disease_type", "diagnosis_time"}
+    missing_cols = required - set(cohort.columns)
+    if missing_cols:
+        raise ValueError(f"Cohort missing columns: {sorted(missing_cols)}")
+
+    cohort = cohort.copy()
+    cohort["diagnosis_time"] = pd.to_datetime(cohort["diagnosis_time"], errors="coerce")
+    cohort = cohort.dropna(subset=["diagnosis_time"])
+    if cohort.empty:
+        return pd.DataFrame(), {"error": "empty_cohort_after_diagnosis_time_parse"}
+
+    if "window_days" not in cohort.columns:
+        cohort["window_days"] = 14
+    if "window_start" not in cohort.columns:
+        cohort["window_start"] = cohort["diagnosis_time"] - pd.to_timedelta(
+            cohort["window_days"], unit="D"
+        )
+
+    meta_cols = {"subject_id", "study_id", "dicom_id", "study_datetime"}
+    if not meta_cols.issubset(frontal_studies.columns):
+        raise ValueError(f"frontal_studies must contain {sorted(meta_cols)}")
+
+    m = cohort.merge(frontal_studies, on="subject_id", how="inner")
+    win = m[
+        (m["study_datetime"] >= m["window_start"]) & (m["study_datetime"] <= m["diagnosis_time"])
+    ].copy()
+
+    qc_pre_dedupe = int(len(win))
+    win = win.drop_duplicates(
+        subset=["subject_id", "hadm_id", "disease_type", "study_id"], keep="first"
+    )
+    n_rows_after_study_dedupe = int(len(win))
+
+    win = win.sort_values(
+        ["subject_id", "hadm_id", "disease_type", "study_datetime"], kind="mergesort"
+    ).reset_index(drop=True)
+
+    if images_root is not None:
+        roots = Path(images_root)
+        paths: list[str | None] = []
+        for sid, stid, did in zip(
+            win["subject_id"].to_numpy(),
+            win["study_id"].to_numpy(),
+            win["dicom_id"].to_numpy(),
+        ):
+            p = locate_image(roots, int(sid), int(stid), str(did))
+            paths.append(str(p) if p else None)
+        win["image_path"] = paths
+        win = win.dropna(subset=["image_path"]).reset_index(drop=True)
+    else:
+        win["image_path"] = None
+
+    win["hours_before_diagnosis"] = (
+        win["diagnosis_time"] - win["study_datetime"]
+    ).dt.total_seconds() / 3600.0
+
+    grp_cols = ["subject_id", "hadm_id", "disease_type"]
+    counts = win.groupby(grp_cols, sort=False).size().reset_index(name="n_resolved_studies")
+    win = win.merge(counts, on=grp_cols, how="left")
+    n_event_groups_before = int(win[grp_cols].drop_duplicates().shape[0])
+    win = win[win["n_resolved_studies"] >= min_resolved_studies].reset_index(drop=True)
+    n_event_groups_after = int(win[grp_cols].drop_duplicates().shape[0])
+
+    win["seq_index"] = win.groupby(grp_cols, sort=False).cumcount()
+
+    qc: dict[str, object] = {
+        "n_cohort_rows_input": int(len(cohort)),
+        "n_merged_rows_time_window_pre_dedupe": qc_pre_dedupe,
+        "n_rows_after_study_dedupe": n_rows_after_study_dedupe,
+        "n_event_groups_before_min_resolved": n_event_groups_before,
+        "n_event_groups_after_min_resolved": n_event_groups_after,
+        "n_output_rows": int(len(win)),
+        "min_resolved_studies": int(min_resolved_studies),
+    }
+    logger.info(
+        "Sequence table: cohort_rows=%d event_groups=%d output_rows=%d (min_studies=%d)",
+        qc["n_cohort_rows_input"],
+        n_event_groups_after,
+        len(win),
+        min_resolved_studies,
+    )
+    return win, qc
