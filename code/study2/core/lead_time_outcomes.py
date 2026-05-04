@@ -308,6 +308,44 @@ def _auc_at_anchor(
     return float(roc_auc_score(y, s))
 
 
+def _build_patient_proxy_labels(
+    inference_df: pd.DataFrame,
+    disease: str | None,
+    *,
+    positive_within_hours: float,
+    negative_at_least_hours: float,
+) -> pd.DataFrame:
+    """Per-patient binary proxy label based on temporal score trajectory.
+
+    Label = 1 if the patient's mean disease_score in the late window
+    (hours_before_diagnosis <= positive_within_hours) exceeds their mean in the early
+    window (hours_before_diagnosis >= negative_at_least_hours), else 0.
+    Patients without studies in both windows are excluded.
+
+    Returns a DataFrame with subject_id / hadm_id / disease_type / proxy_label columns.
+    """
+    inf = inference_df.copy()
+    if disease is not None:
+        inf = inf[inf["disease_type"].astype(str) == disease]
+    inf["hours_before_diagnosis"] = pd.to_numeric(inf["hours_before_diagnosis"], errors="coerce")
+    inf["disease_score"] = pd.to_numeric(inf["disease_score"], errors="coerce")
+    inf = inf.dropna(subset=["hours_before_diagnosis", "disease_score"])
+
+    keys = ["subject_id", "hadm_id", "disease_type"]
+    rows: list[dict[str, object]] = []
+    for key, grp in inf.groupby(keys, sort=False):
+        late = grp.loc[grp["hours_before_diagnosis"] <= positive_within_hours, "disease_score"]
+        early = grp.loc[grp["hours_before_diagnosis"] >= negative_at_least_hours, "disease_score"]
+        if late.empty or early.empty:
+            continue
+        label = 1 if float(late.mean()) > float(early.mean()) else 0
+        rows.append({k: v for k, v in zip(keys, key)} | {"proxy_label": label})
+
+    if not rows:
+        return pd.DataFrame(columns=keys + ["proxy_label"])
+    return pd.DataFrame(rows)
+
+
 def _auc_at_anchor_proxy(
     inference_df: pd.DataFrame,
     anchor_h: float,
@@ -316,8 +354,19 @@ def _auc_at_anchor_proxy(
     positive_within_hours: float,
     negative_at_least_hours: float,
     min_n: int = 4,
+    _prebuilt_labels: pd.DataFrame | None = None,
 ) -> float:
-    """ROC AUC of landmark score vs late-window (1) vs early-window (0) proxy on the landmark study."""
+    """ROC AUC of landmark score at anchor_h vs patient-level late/early-window proxy.
+
+    The proxy label is patient-level (computed once across the full sequence), not
+    per-study. The old per-study approach applied apply_proxy_labels to the landmark
+    row, whose hours_before_diagnosis is always ≈ anchor_h — so every patient received
+    the same label (or NaN), making AUC undefined at almost every anchor.
+
+    Label = 1 when a patient's mean disease_score in studies <= positive_within_hours
+    before diagnosis exceeds their mean in studies >= negative_at_least_hours before
+    diagnosis (i.e. score rose toward diagnosis), else 0.
+    """
     from sklearn.metrics import roc_auc_score
 
     inf = inference_df.copy()
@@ -329,27 +378,32 @@ def _auc_at_anchor_proxy(
     inf["hours_before_diagnosis"] = pd.to_numeric(inf["hours_before_diagnosis"], errors="coerce")
     inf["disease_score"] = pd.to_numeric(inf["disease_score"], errors="coerce")
     inf = inf.dropna(subset=["hours_before_diagnosis", "disease_score"])
-    keys = ["subject_id", "hadm_id", "disease_type"]
-    scores: list[float] = []
-    labels: list[int] = []
-    for _, grp in inf.groupby(keys, sort=False):
-        row = _pick_landmark_row(grp, float(anchor_h))
-        one = pd.DataFrame([row])
-        if "hours_before_diagnosis" not in one.columns:
-            continue
-        pl = apply_proxy_labels(
-            one,
+
+    labels_df = (
+        _prebuilt_labels
+        if _prebuilt_labels is not None and not _prebuilt_labels.empty
+        else _build_patient_proxy_labels(
+            inf, None,
             positive_within_hours=positive_within_hours,
             negative_at_least_hours=negative_at_least_hours,
         )
-        if pd.isna(pl.iloc[0]):
-            continue
-        scores.append(float(row["disease_score"]))
-        labels.append(int(pl.iloc[0]))
-
-    if len(scores) < int(min_n) or len(np.unique(labels)) < 2:
+    )
+    if labels_df.empty or labels_df["proxy_label"].nunique() < 2:
         return float("nan")
-    return float(roc_auc_score(labels, scores))
+
+    keys = ["subject_id", "hadm_id", "disease_type"]
+    score_rows: list[dict[str, object]] = []
+    for key, grp in inf.groupby(keys, sort=False):
+        score = _disease_score_at_landmark(grp, float(anchor_h))
+        score_rows.append({k: v for k, v in zip(keys, key)} | {"score": score})
+
+    if not score_rows:
+        return float("nan")
+
+    merged = pd.DataFrame(score_rows).merge(labels_df[keys + ["proxy_label"]], on=keys, how="inner")
+    if len(merged) < int(min_n) or merged["proxy_label"].nunique() < 2:
+        return float("nan")
+    return float(roc_auc_score(merged["proxy_label"].astype(int), merged["score"]))
 
 
 def auc_vs_hours_before_diagnosis(
@@ -362,22 +416,37 @@ def auc_vs_hours_before_diagnosis(
 ) -> pd.DataFrame:
     """One AUC per (disease_type, anchor_hour) using landmark ``disease_score``.
 
-    For each anchor *h*, the score uses studies with ``hours_before_diagnosis >= h``,
-    choosing the study whose timing is closest to *h* (see ``_pick_landmark_row``).
+    For each anchor *h*, the score is taken from the study with
+    ``hours_before_diagnosis`` closest to *h* (see ``_pick_landmark_row``).
 
-    **Primary (manuscript Phase 4, Step 5):** ROC AUC vs **imaging timing proxy** on the
-    landmark study — late window (≤ ``positive_within_hours`` before diagnosis) vs early
-    (≥ ``negative_at_least_hours``), aligned with threshold-calibration proxy semantics.
+    **Primary outcome:** patient-level proxy label — 1 if a patient's mean
+    disease_score in the late window (≤ ``positive_within_hours`` before diagnosis)
+    exceeds their mean in the early window (≥ ``negative_at_least_hours``), else 0.
+    These labels are computed once per disease across each patient's full sequence,
+    so they are consistent across all anchor values.
 
-    If too few patients have a labeled landmark study at that anchor, falls back to
-    patient-level ``event`` (detected vs censored), then to long-vs-short lead-time
-    splits as in the legacy path.
+    Falls back to VLM detection event (detected vs censored) when too few patients
+    have studies in both windows, then to long-vs-short lead-time splits.
     """
     keys = ["subject_id", "hadm_id", "disease_type"]
     det = survival_outcomes[keys + ["event", "hours_lead_time"]].copy()
     diseases = sorted(det["disease_type"].astype(str).unique())
     out_rows: list[dict[str, object]] = []
     for d in diseases:
+        # Pre-compute patient-level proxy labels once for this disease (not per anchor).
+        patient_labels = _build_patient_proxy_labels(
+            inference_df, d,
+            positive_within_hours=positive_within_hours,
+            negative_at_least_hours=negative_at_least_hours,
+        )
+        proxy_usable = (not patient_labels.empty and patient_labels["proxy_label"].nunique() >= 2)
+        if not proxy_usable:
+            logger.warning(
+                "Disease %s: patient proxy labels not usable (need studies in both ≤%.0f h "
+                "and ≥%.0f h windows); falling back to event-based AUC.",
+                d, positive_within_hours, negative_at_least_hours,
+            )
+
         sub = det[det["disease_type"].astype(str) == d].copy()
         y_col = "y"
         evt = sub["event"].astype(int)
@@ -407,29 +476,31 @@ def auc_vs_hours_before_diagnosis(
                 auc_mode = "auc_unusable_constant_y"
             else:
                 logger.info(
-                    "Disease %s: AUC uses outcome '%s' (all VLM-detected in this split).",
+                    "Disease %s: AUC fallback outcome '%s' (all VLM-detected in this split).",
                     d,
                     auc_mode,
                 )
 
         for h in anchor_hours:
-            auc_proxy = _auc_at_anchor_proxy(
-                inference_df,
-                float(h),
-                d,
-                positive_within_hours=positive_within_hours,
-                negative_at_least_hours=negative_at_least_hours,
-            )
-            if np.isfinite(auc_proxy):
-                out_rows.append(
-                    {
-                        "disease_type": d,
-                        "hours_before_diagnosis": float(h),
-                        "roc_auc": auc_proxy,
-                        "auc_outcome": "landmark_study_proxy_late_vs_early_window",
-                    }
+            if proxy_usable:
+                auc_proxy = _auc_at_anchor_proxy(
+                    inference_df,
+                    float(h),
+                    d,
+                    positive_within_hours=positive_within_hours,
+                    negative_at_least_hours=negative_at_least_hours,
+                    _prebuilt_labels=patient_labels,
                 )
-                continue
+                if np.isfinite(auc_proxy):
+                    out_rows.append(
+                        {
+                            "disease_type": d,
+                            "hours_before_diagnosis": float(h),
+                            "roc_auc": auc_proxy,
+                            "auc_outcome": "patient_proxy_late_gt_early_window",
+                        }
+                    )
+                    continue
 
             auc = _auc_at_anchor(inference_df, outcome, float(h), disease=d, y_col=y_col)
             out_rows.append(
@@ -718,10 +789,11 @@ def run_lead_time_outcome_analysis(
             "(manuscript Phase 4 Step 2)."
         ),
         "auc_primary_outcome": (
-            "ROC AUC of disease_score at each landmark hour vs late-window (≤ "
-            f"{auc_proxy_positive_within_hours:g} h before diagnosis) vs early-window "
-            f"(≥ {auc_proxy_negative_at_least_hours:g} h) proxy on the landmark study; "
-            "falls back to detection-vs-censor or lead-time splits when proxy labels are too sparse."
+            f"Patient-level proxy: label=1 when mean disease_score in the late window "
+            f"(≤{auc_proxy_positive_within_hours:g} h before diagnosis) exceeds mean in the "
+            f"early window (≥{auc_proxy_negative_at_least_hours:g} h); AUC of landmark "
+            "disease_score at each anchor vs this label. Falls back to VLM detection event "
+            "(detected vs censored) or lead-time split when proxy labels are unavailable."
         ),
         "cohort_characteristics": t1,
         "median_survival_time_hours": km.get("median_survival_time_hours"),
