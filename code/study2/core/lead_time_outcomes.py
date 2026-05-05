@@ -689,11 +689,10 @@ def plot_auc_vs_hours(auc_df: pd.DataFrame, out_path: Path, *, title: str | None
             marker="o",
             label=str(d),
         )
-    ax.set_xlabel("Landmark: hours before diagnosis (larger = farther from diagnosis time)")
-    ax.set_ylabel(
-        "ROC AUC (VLM score at landmark vs outcome; primary = late vs early imaging-window proxy)"
-    )
+    ax.set_xlabel("Hours before diagnosis (time flows left → right toward diagnosis)")
+    ax.set_ylabel("ROC AUC (VLM score at landmark vs outcome)")
     ax.set_ylim(0.0, 1.0)
+    ax.invert_xaxis()  # left=far from dx (early window), right=close to dx (late window)
     ax.set_title(title or "AUC vs hours before diagnosis")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
