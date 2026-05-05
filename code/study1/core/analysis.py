@@ -248,19 +248,21 @@ def run_stats_results(
     out_dir: Path,
     alpha: float = 0.05,
     force_three_comparisons: bool = False,
+    feature_columns: list[str] | None = None,
 ) -> dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(input_csv)
 
-    required_cols = {"study_id", "subject_id", "circadian_bin", "severity", "radiologist_cluster", *FEATURE_COLUMNS}
+    cols = feature_columns if feature_columns is not None else FEATURE_COLUMNS
+    required_cols = {"study_id", "subject_id", "circadian_bin", "severity", "radiologist_cluster", *cols}
     missing = sorted(required_cols - set(df.columns))
     if missing:
         raise ValueError(f"Missing required columns in feature extraction CSV: {missing}")
 
-    table1 = build_table1_descriptives(df, FEATURE_COLUMNS)
+    table1 = build_table1_descriptives(df, cols)
     table2, icc_table = build_mixedlm_and_effects(
         df,
-        FEATURE_COLUMNS,
+        cols,
         alpha=alpha,
         force_three_comparisons=force_three_comparisons,
     )
@@ -273,7 +275,7 @@ def run_stats_results(
     table1.to_csv(table1_path, index=False)
     table2.to_csv(table2_path, index=False)
     icc_table.to_csv(icc_path, index=False)
-    save_feature_plots(df, FEATURE_COLUMNS, figure_path)
+    save_feature_plots(df, cols, figure_path)
 
     return {
         "table1": table1_path,

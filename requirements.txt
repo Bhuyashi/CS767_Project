@@ -3,6 +3,9 @@ pandas>=1.5
 numpy>=1.23
 
 # ── Study 1 ──────────────────────────────────────────────────────────────────
+# Study 1 LLM features (install the one matching your backend):
+# google-generativeai>=0.5   # Gemini
+# openai>=1.0                # OpenAI-compatible (Together AI, Groq, local vLLM)
 scikit-learn>=1.2
 statsmodels>=0.14
 matplotlib>=3.7
