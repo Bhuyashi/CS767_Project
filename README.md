@@ -5,7 +5,7 @@ Analyses on MIMIC-CXR, MIMIC_CXR_JPG and MIMIC-IV, MIMIC_IV-Note.
 | Study | Topic | Features |
 |-------|--------|--------|
 | **Study 1** | Circadian language drift in radiology reports | data → features → proxy radiologist clusters → mixed models, figures, inference |
-| **Study 2** | VLM lead-time cohort | |
+| **Study 2** | VLM lead-time detection | cohort → BioViL-T inference → threshold calibration → KM / Cox / AUC |
 
 ---
 
@@ -106,13 +106,52 @@ Adjust the path to your local `files/` root.
 
 ---
 
-## Study 2: VLM lead-time cohort (planned)
+## Study 2: VLM lead-time detection
 
-When you add the second study, a practical convention is:
+**Question:** How early do disease-aligned vision–language scores on serial chest radiographs rise relative to sepsis or heart failure documentation time?
 
-- `code/study2/` for code, mirroring `study1` (e.g. `core/`, `scripts/`).
-- `configure_study_logging(study_name="study2", …)` so logs stay separated.
-- This README: extend the table at the top and add a **Study 2** section with data sources, run commands, and outputs.
+**Data**
+
+- **MIMIC-IV:** `csv/discharge.csv` (NegEx-style first mention + `admissions.csv` for stay merge), optional `derived/sofa.csv` for Cox.
+- **MIMIC-CXR:** `mimic-cxr-2.0.0-metadata.csv` and **MIMIC-CXR-JPG** paths resolved by the scripts.
+
+**Pipeline**
+
+1. **Cohort:** `build_index_cohort.py` — discharge-note mentions, ≥3 CXR studies in the 14-day pre-diagnosis window, sepsis vs heart failure rows.
+2. **Images:** `download_cohort_mimic_jpg.py` when you need the JPG tree for a saved cohort CSV.
+3. **Inference:** `run_inference.py` — BioViL-T (`hi-ml-multimodal`) on ordered in-window frontal studies per admission event.
+4. **Calibration:** `calibrate_vlm_detection.py` — patient-level validation split, threshold sweep, reporting-split detection events CSV.
+5. **Outcomes:** `analyze_lead_time_outcomes.py` — survival table, Kaplan–Meier / log-rank / Cox, AUC vs hours-before-diagnosis anchors.
+
+GPU batch runs on CHTC are described in `chtc/README.md`.
+
+### Layout
+
+```text
+code/study2/
+  core/                     # cohort, data_io, model, pipeline, calibration, lead_time_outcomes
+  scripts/                  # CLIs above
+```
+
+### Run (from repo root, defaults under `data/`)
+
+```bash
+python code/study2/scripts/build_index_cohort.py
+python code/study2/scripts/run_inference.py
+python code/study2/scripts/calibrate_vlm_detection.py
+python code/study2/scripts/analyze_lead_time_outcomes.py
+```
+
+Each script accepts `--help` and path overrides (`--discharge-csv`, `--inference-csv`, `--events-csv`, `--output-dir`, etc.).
+
+**Outputs (typical)**
+
+- `data/MIMIC-CXR/csv/study2_cohort/` — cohort CSV + QC JSON  
+- `data/MIMIC-CXR/csv/study2_results/` — inference CSV, embeddings, QC  
+- `data/MIMIC-CXR/csv/study2_detection_calibration/` — thresholds, sweeps, detection events  
+- `data/MIMIC-CXR/csv/study2_lead_time_outcomes/` — survival table, Cox summary, figures, JSON summary  
+
+Logs: `configure_study_logging(study_name="study2_…")` → `code/logs/`.
 
 ---
 

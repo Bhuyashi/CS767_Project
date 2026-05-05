@@ -20,11 +20,16 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+try:
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - optional plotting dependency
+    plt = None
 
 _CODE_DIR = Path(__file__).resolve().parents[2]
 if str(_CODE_DIR) not in sys.path:
@@ -51,6 +56,31 @@ def _json_safe(obj: object) -> object:
     if isinstance(obj, float) and (np.isnan(obj) or np.isposinf(obj) or np.isneginf(obj)):
         return None
     return obj
+
+
+def _safe_slug(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "disease"
+
+
+def _write_roc_plot(roc_df: pd.DataFrame, auc: float, disease: str, out_path: Path) -> None:
+    if plt is None:
+        logger.warning("matplotlib unavailable; skipping ROC plot for %s", disease)
+        return
+    if roc_df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot(roc_df["fpr"], roc_df["tpr"], marker="o", linewidth=1.5, label=f"ROC (AUC={auc:.3f})")
+    ax.plot([0.0, 1.0], [0.0, 1.0], linestyle="--", linewidth=1.0, color="gray", label="Chance")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title(f"ROC Curve - {disease}")
+    ax.legend(loc="lower right")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
 
 
 def parse_args() -> argparse.Namespace:
@@ -182,6 +212,19 @@ def run() -> None:
         if isinstance(sw, pd.DataFrame) and not sw.empty:
             sw.to_csv(path, index=False)
             logger.info("Wrote %s", path)
+    for d, roc_df in out["roc_by_disease"].items():
+        if not isinstance(roc_df, pd.DataFrame) or roc_df.empty:
+            continue
+        slug = _safe_slug(str(d))
+        roc_csv = args.output_dir / f"vlm_roc_curve_{slug}.csv"
+        roc_df.to_csv(roc_csv, index=False)
+        logger.info("Wrote %s", roc_csv)
+        auc = float(out["per_disease"].get(str(d), {}).get("roc_auc", float("nan")))
+        if np.isfinite(auc):
+            roc_png = args.output_dir / f"vlm_roc_curve_{slug}.png"
+            _write_roc_plot(roc_df, auc, str(d), roc_png)
+            if roc_png.exists():
+                logger.info("Wrote %s", roc_png)
 
     events_rep = out["events_reporting"]
     events_val = out["events_validation"]

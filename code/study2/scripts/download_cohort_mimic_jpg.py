@@ -408,14 +408,6 @@ def run() -> None:
         logger.error("--max-images must be >= 1")
         sys.exit(1)
 
-    if not args.dry_run:
-        if not args.physionet_user or not args.physionet_password:
-            logger.error(
-                "PhysioNet credentials missing. Set PHYSIONET_USER and PHYSIONET_PASSWORD, "
-                "or pass --physionet-user / --physionet-password."
-            )
-            sys.exit(1)
-
     cohort = _load_index_cohort(args.cohort_csv)
     if cohort.empty:
         logger.error("No valid cohort rows after parsing diagnosis_time: %s", args.cohort_csv)
@@ -477,6 +469,46 @@ def run() -> None:
         logger.info("Dry run: wrote manifest %s", manifest_path)
         return
 
+    pending_targets: list[tuple[Path, dict[str, object]]] = []
+    n_skip = 0
+    for rel, meta in targets:
+        dest = files_root / rel
+        url = _physionet_url(args.base_url, rel)
+        if dest.exists():
+            manifest["images"].append(
+                {**meta, "relative_path": rel.as_posix(), "url": url, "status": "skipped_existing"}
+            )
+            n_skip += 1
+            continue
+        pending_targets.append((rel, meta))
+
+    if not args.physionet_user or not args.physionet_password:
+        if pending_targets:
+            logger.error(
+                "PhysioNet credentials missing. Set PHYSIONET_USER and PHYSIONET_PASSWORD, "
+                "or pass --physionet-user / --physionet-password."
+            )
+            sys.exit(1)
+        logger.info("All selected files already exist locally; no PhysioNet credentials needed.")
+
+    if not pending_targets:
+        manifest["download_summary"] = {
+            "n_files_planned": len(targets),
+            "downloaded_ok": 0,
+            "skipped_existing": n_skip,
+            "failed": 0,
+        }
+        args.output_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = args.output_root / "download_cohort_mimic_jpg_manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        logger.info(
+            "Done. downloaded_ok=0 skipped_existing=%d failed=0 manifest=%s",
+            n_skip,
+            manifest_path,
+        )
+        logger.info("Point run_inference --images-root at: %s", files_root)
+        return
+
     opener = _build_opener()
     if not args.skip_access_probe:
         args.base_url = _verify_physionet_mimic_cxr_jpg_access(
@@ -488,9 +520,10 @@ def run() -> None:
         )
         manifest["physionet_base_url"] = args.base_url
 
-    n_ok = n_skip = n_fail = 0
+    n_ok = 0
+    n_fail = 0
 
-    for rel, meta in tqdm(targets, desc="Downloading JPGs", unit="file"):
+    for rel, meta in tqdm(pending_targets, desc="Downloading JPGs", unit="file"):
         url = _physionet_url(args.base_url, rel)
         dest = files_root / rel
         ok, status = _download_one(

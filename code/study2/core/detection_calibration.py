@@ -125,6 +125,53 @@ def sweep_thresholds_study_level(
     return pd.DataFrame(rows)
 
 
+def roc_curve_study_level(
+    scores: np.ndarray,
+    y_true: np.ndarray,
+) -> tuple[pd.DataFrame, float]:
+    """ROC points and AUC from study-level scores against binary proxy labels."""
+    scores = np.asarray(scores, dtype=np.float64).ravel()
+    y_true = np.asarray(y_true, dtype=np.int64).ravel()
+    n_pos = int(np.sum(y_true == 1))
+    n_neg = int(np.sum(y_true == 0))
+    if n_pos == 0 or n_neg == 0:
+        return pd.DataFrame(), float("nan")
+
+    # Evaluate thresholds from +inf -> unique scores -> -inf to trace full ROC.
+    unique_scores = np.unique(scores)
+    thresholds = np.concatenate(([np.inf], unique_scores[::-1], [-np.inf]))
+    rows: list[dict[str, float]] = []
+    for tau in thresholds:
+        y_pred = (scores > float(tau)).astype(np.int64)
+        tp = int(np.sum((y_true == 1) & (y_pred == 1)))
+        fn = int(np.sum((y_true == 1) & (y_pred == 0)))
+        fp = int(np.sum((y_true == 0) & (y_pred == 1)))
+        tn = int(np.sum((y_true == 0) & (y_pred == 0)))
+        tpr = tp / (tp + fn) if (tp + fn) > 0 else float("nan")
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else float("nan")
+        rows.append(
+            {
+                "threshold": float(tau),
+                "tpr": float(tpr),
+                "fpr": float(fpr),
+                "tp": float(tp),
+                "fn": float(fn),
+                "fp": float(fp),
+                "tn": float(tn),
+            }
+        )
+    roc = pd.DataFrame(rows).dropna(subset=["fpr", "tpr"]).drop_duplicates(subset=["fpr", "tpr"])
+    roc = roc.sort_values(["fpr", "tpr"]).reset_index(drop=True)
+    x = roc["fpr"].to_numpy(dtype=np.float64)
+    y = roc["tpr"].to_numpy(dtype=np.float64)
+    if hasattr(np, "trapezoid"):
+        auc = float(np.trapezoid(y, x))
+    else:
+        # Compatibility fallback for NumPy builds without trapz/trapezoid.
+        auc = float(np.sum((x[1:] - x[:-1]) * (y[1:] + y[:-1]) * 0.5)) if len(x) > 1 else 0.0
+    return roc, auc
+
+
 def pick_threshold(
     sweep: pd.DataFrame,
     criterion: Criterion,
@@ -219,6 +266,8 @@ def calibration_for_disease(
             "error": "no_rows",
             "threshold": None,
             "sweep": pd.DataFrame(),
+            "roc_curve": pd.DataFrame(),
+            "roc_auc": float("nan"),
         }
 
     vsub = sub[val_mask.reindex(sub.index).fillna(False)].copy()
@@ -274,6 +323,8 @@ def calibration_for_disease(
                     "n_proxy_negative": fb_neg,
                     "best_row": None,
                     "sweep": pd.DataFrame(),
+                    "roc_curve": pd.DataFrame(),
+                    "roc_auc": float("nan"),
                 }
         else:
             logger.warning(
@@ -297,6 +348,8 @@ def calibration_for_disease(
                 "n_proxy_negative": n_neg,
                 "best_row": None,
                 "sweep": pd.DataFrame(),
+                "roc_curve": pd.DataFrame(),
+                "roc_auc": float("nan"),
             }
 
     sweep = sweep_thresholds_study_level(
@@ -306,6 +359,10 @@ def calibration_for_disease(
     )
     tau, sweep_sorted, best_pos = pick_threshold(sweep, criterion)
     best_row = sweep_sorted.iloc[best_pos].to_dict()
+    roc_curve, roc_auc = roc_curve_study_level(
+        labeled["disease_score"].to_numpy(),
+        labeled["proxy_label"].to_numpy(),
+    )
 
     return {
         "disease_type": disease,
@@ -320,6 +377,8 @@ def calibration_for_disease(
         "n_proxy_negative": n_neg,
         "best_row": best_row,
         "sweep": sweep_sorted,
+        "roc_curve": roc_curve,
+        "roc_auc": roc_auc,
     }
 
 
@@ -398,6 +457,7 @@ def run_detection_threshold_calibration(
     diseases = sorted(df["disease_type"].astype(str).unique())
     per_disease: dict[str, object] = {}
     sweeps_by_disease: dict[str, pd.DataFrame] = {}
+    roc_by_disease: dict[str, pd.DataFrame] = {}
     thresholds_out: dict[str, float] = {}
 
     for d in diseases:
@@ -412,6 +472,7 @@ def run_detection_threshold_calibration(
             allow_full_cohort_fallback=allow_full_cohort_fallback,
         )
         sweeps_by_disease[d] = out.pop("sweep")  # type: ignore[assignment]
+        roc_by_disease[d] = out.pop("roc_curve")  # type: ignore[assignment]
         per_disease[d] = out
         if out.get("threshold") is not None:
             thresholds_out[d] = float(out["threshold"])
@@ -427,6 +488,7 @@ def run_detection_threshold_calibration(
         "thresholds_by_disease": thresholds_out,
         "per_disease": per_disease,
         "sweeps_by_disease": sweeps_by_disease,
+        "roc_by_disease": roc_by_disease,
         "val_fraction": val_fraction,
         "random_state": random_state,
         "criterion": criterion,
