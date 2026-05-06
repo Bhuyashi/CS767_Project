@@ -213,27 +213,61 @@ class HuggingFaceScorer(LLMScorer):
     """Local HuggingFace model via transformers pipeline (GPU-accelerated).
 
     Recommended models (no gated access required):
-      microsoft/Phi-3-mini-4k-instruct   — fast, 3.8B, excellent instruction following
-      Qwen/Qwen2-7B-Instruct             — strong, 7B
-      HuggingFaceH4/zephyr-7b-beta       — 7B, good JSON compliance
+      microsoft/Phi-3-mini-4k-instruct     — 3.8B, fits 8GB GPU, great instruction following
+      aaditya/Llama3-OpenBioLLM-8B         — 8B medical, fits A10 (24GB) or 8GB with 4-bit
+      BioMistral/BioMistral-7B-DARE        — 7B medical, fits A10 or 8GB with 4-bit
+
+    quantization: "4bit" or "8bit" reduces VRAM usage (requires bitsandbytes):
+        pip install bitsandbytes
+        "4bit" : ~4-5GB for a 7B model  (RTX 2080 compatible)
+        "8bit" : ~7-8GB for a 7B model
+        "none" : full float16, ~14GB for 7B (A10 / A100 recommended)
     """
 
-    def __init__(self, model: str = "microsoft/Phi-3-mini-4k-instruct", device: str = "auto"):
+    def __init__(
+        self,
+        model: str = "microsoft/Phi-3-mini-4k-instruct",
+        device: str = "auto",
+        quantization: str = "none",
+    ):
         try:
             import torch
-            from transformers import pipeline as hf_pipeline
+            from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline as hf_pipeline
         except ImportError:
             raise ImportError("pip install transformers accelerate")
 
-        logger.info("Loading HuggingFace model: %s  (device_map=%s)", model, device)
+        quantization_config = None
+        if quantization in ("4bit", "8bit"):
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError:
+                raise ImportError("pip install bitsandbytes  # required for 4-bit/8-bit quantization")
+            if quantization == "4bit":
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                )
+            else:
+                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+
+        logger.info(
+            "Loading HuggingFace model: %s  (device_map=%s, quantization=%s)",
+            model, device, quantization,
+        )
+
+        kwargs: dict = {"device_map": device, "torch_dtype": "auto"}
+        if quantization_config is not None:
+            kwargs["quantization_config"] = quantization_config
+
         self._pipe = hf_pipeline(
             "text-generation",
             model=model,
-            device_map=device,
-            torch_dtype="auto",
+            **kwargs,
         )
         self._model_name = model
-        logger.info("HuggingFaceScorer ready: model=%s", model)
+        logger.info("HuggingFaceScorer ready: model=%s quantization=%s", model, quantization)
 
     def _call_api(self, prompt: str) -> str:
         outputs = self._pipe(
@@ -244,7 +278,7 @@ class HuggingFaceScorer(LLMScorer):
             top_p=None,
             return_full_text=False,
         )
-        # pipeline returns list of dicts: [{"generated_text": [{"role": ..., "content": ...}]}]
+        # pipeline returns [{"generated_text": [{"role": ..., "content": ...}]}]
         result = outputs[0]["generated_text"]
         if isinstance(result, list):
             return str(result[-1].get("content", result[-1]))
@@ -260,6 +294,7 @@ def build_scorer(
     api_key: str = "",
     model: str = "",
     base_url: str = "",
+    quantization: str = "none",
 ) -> LLMScorer:
     if backend == "gemini":
         return GeminiScorer(api_key=api_key, model=model or "gemini-1.5-flash")
@@ -270,5 +305,8 @@ def build_scorer(
             raise ValueError("--base-url and --model are required for openai_compat backend")
         return OpenAICompatibleScorer(api_key=api_key, base_url=base_url, model=model)
     if backend == "hf":
-        return HuggingFaceScorer(model=model or "microsoft/Phi-3-mini-4k-instruct")
+        return HuggingFaceScorer(
+            model=model or "microsoft/Phi-3-mini-4k-instruct",
+            quantization=quantization,
+        )
     raise ValueError(f"Unknown backend: {backend!r}. Choose: gemini, ollama, openai_compat, hf")

@@ -103,6 +103,8 @@ def parse_args() -> argparse.Namespace:
                    help="Model name (e.g. gemini-1.5-flash, llama3, meta-llama/Llama-3-8b-chat-hf).")
     p.add_argument("--base-url", type=str, default="",
                    help="Base URL for openai_compat or ollama backends.")
+    p.add_argument("--quantization", type=str, default="none", choices=["none", "4bit", "8bit"],
+                   help="Quantization for hf backend. '4bit' fits 7B models on 8GB GPUs (requires bitsandbytes).")
     p.add_argument("--features-csv", type=Path,
                    default=DATA_ROOT / "MIMIC-CXR/csv/study1_features.csv",
                    help="Existing Study 1 feature CSV (provides metadata columns).")
@@ -153,6 +155,7 @@ def run() -> None:
         api_key=args.api_key,
         model=args.model,
         base_url=args.base_url,
+        quantization=args.quantization,
     )
 
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)

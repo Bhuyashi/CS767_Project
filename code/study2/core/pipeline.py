@@ -197,6 +197,8 @@ def run_sequence_inference(
                 "disease_score": round(float(score), 6),
                 "use_prior_conditioning": bool(prior is not None),
             }
+            if "label" in row.index and pd.notna(row["label"]):
+                out["label"] = int(row["label"])
             if "ViewPosition" in row.index and pd.notna(row["ViewPosition"]):
                 out["ViewPosition"] = str(row["ViewPosition"])
             for k, v in detail.items():

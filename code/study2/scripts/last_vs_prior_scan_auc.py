@@ -331,7 +331,7 @@ def plot_score_distributions(
             bp = ax.boxplot(
                 valid_series,
                 positions=valid_positions,
-                labels=valid_labels,
+                tick_labels=valid_labels,
                 patch_artist=True,
                 showfliers=False,
                 widths=0.55,
