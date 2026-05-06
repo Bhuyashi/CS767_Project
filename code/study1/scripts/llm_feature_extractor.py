@@ -95,8 +95,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Score radiology reports with an LLM and write metrics for Study 1 stats analysis."
     )
-    p.add_argument("--backend", type=str, required=True, choices=["gemini", "ollama", "openai_compat"],
-                   help="LLM backend to use.")
+    p.add_argument("--backend", type=str, required=True, choices=["gemini", "ollama", "openai_compat", "hf"],
+                   help="LLM backend to use. 'hf' runs a local HuggingFace model on GPU (no API key needed).")
     p.add_argument("--api-key", type=str, default=os.environ.get("LLM_API_KEY", ""),
                    help="API key for Gemini or OpenAI-compatible endpoint (or set LLM_API_KEY env var).")
     p.add_argument("--model", type=str, default="",

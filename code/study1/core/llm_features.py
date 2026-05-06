@@ -209,7 +209,49 @@ class OpenAICompatibleScorer(LLMScorer):
         return resp.choices[0].message.content
 
 
-BackendType = Literal["gemini", "ollama", "openai_compat"]
+class HuggingFaceScorer(LLMScorer):
+    """Local HuggingFace model via transformers pipeline (GPU-accelerated).
+
+    Recommended models (no gated access required):
+      microsoft/Phi-3-mini-4k-instruct   — fast, 3.8B, excellent instruction following
+      Qwen/Qwen2-7B-Instruct             — strong, 7B
+      HuggingFaceH4/zephyr-7b-beta       — 7B, good JSON compliance
+    """
+
+    def __init__(self, model: str = "microsoft/Phi-3-mini-4k-instruct", device: str = "auto"):
+        try:
+            import torch
+            from transformers import pipeline as hf_pipeline
+        except ImportError:
+            raise ImportError("pip install transformers accelerate")
+
+        logger.info("Loading HuggingFace model: %s  (device_map=%s)", model, device)
+        self._pipe = hf_pipeline(
+            "text-generation",
+            model=model,
+            device_map=device,
+            torch_dtype="auto",
+        )
+        self._model_name = model
+        logger.info("HuggingFaceScorer ready: model=%s", model)
+
+    def _call_api(self, prompt: str) -> str:
+        outputs = self._pipe(
+            [{"role": "user", "content": prompt}],
+            max_new_tokens=256,
+            do_sample=False,
+            temperature=None,
+            top_p=None,
+            return_full_text=False,
+        )
+        # pipeline returns list of dicts: [{"generated_text": [{"role": ..., "content": ...}]}]
+        result = outputs[0]["generated_text"]
+        if isinstance(result, list):
+            return str(result[-1].get("content", result[-1]))
+        return str(result)
+
+
+BackendType = Literal["gemini", "ollama", "openai_compat", "hf"]
 
 
 def build_scorer(
@@ -227,4 +269,6 @@ def build_scorer(
         if not base_url or not model:
             raise ValueError("--base-url and --model are required for openai_compat backend")
         return OpenAICompatibleScorer(api_key=api_key, base_url=base_url, model=model)
-    raise ValueError(f"Unknown backend: {backend!r}. Choose: gemini, ollama, openai_compat")
+    if backend == "hf":
+        return HuggingFaceScorer(model=model or "microsoft/Phi-3-mini-4k-instruct")
+    raise ValueError(f"Unknown backend: {backend!r}. Choose: gemini, ollama, openai_compat, hf")
